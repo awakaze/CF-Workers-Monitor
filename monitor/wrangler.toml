@@ -4,9 +4,13 @@
 # 说明：KV 命名空间 id 非敏感（仅资源标识，读写需 API Token），可入库；他人使用请替换为自己创建的命名空间 id。
 # 敏感变量（EDGE / TG_BOT_TOKEN 等）请配置在 Cloudflare 控制台 Secrets 或本地 .dev.vars，勿写入本文件。
 
-name = "cf-workers-monitor-monitor"
+name = "cf-workers-monitor"
 main = "worker.js"
 compatibility_date = "2024-09-23"
+
+# 部署时保留控制台手动添加的变量（否则 push 部署会清理未在 toml 声明的控制台变量）
+# 注意：须为顶层字段，不能放在 [observability.logs] 等表段内；同名变量仍会被下方声明覆盖
+keep_vars = true
 
 # KV 命名空间绑定（存储"周期内已通知阈值"标志位）
 # 1. 在 Cloudflare 控制台创建 KV 命名空间（如 cf-monitor-state）
@@ -40,3 +44,21 @@ kv_namespaces = [
 #   TG_BOT_TOKEN    # Telegram Bot Token（可选）
 #   TG_CHAT_ID      # Telegram 接收 chat id（可选）
 # 本地开发时放在 monitor/.dev.vars（已被 .gitignore 忽略）
+
+# 可观测性：收集调用日志并保留到 Workers 仪表板（防止 push 部署时日志配置被覆盖重置）
+[observability.logs]
+enabled = true
+invocation_logs = true
+
+# 静态变量（覆盖代码内置默认阈值，非敏感；等效于在控制台 Variables 设置，随代码提交不丢失）
+[vars]
+# 兼容旧版：仅对 workers/requests 生效，阈值列表（逗号分隔绝对请求数）
+# THRESHOLDS = "100000,50000,20000,10000"
+# 推荐用下列新命名覆盖各产品指标（名称=THRESHOLD_<产品>_<指标>，值=逗号分隔升序；设 0 表示不监控）：
+# THRESHOLD_PAGES_BUILDS = "10,80"            # Pages 月构建数
+# THRESHOLD_WORKERS_REQUESTS = "50000,80000,95000"
+# THRESHOLD_KV_READS = "50000,80000,95000"
+# THRESHOLD_KV_WRITES = "800,950"
+# THRESHOLD_R2_CLASSAOPERATIONS = "800000,950000"
+# THRESHOLD_R2_CLASSBOPERATIONS = "8000000,9500000"
+# THRESHOLD_D1_ROWSREAD = "4000000,4750000"

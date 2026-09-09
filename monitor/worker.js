@@ -87,6 +87,12 @@ export default {
         await runMonitor(env);
     },
 
+    /** 邮件触发入口：收到绑定地址的邮件即触发一次监控（需在 CF 控制台把邮箱地址绑定到本 Worker） */
+    async email(message, env, ctx) {
+        console.log('收到邮件触发，开始运行监控');
+        await runMonitor(env);
+    },
+
     /** 便捷访问入口：/ 返回一行状态，可用于确认 Worker 存活 */
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
@@ -100,6 +106,21 @@ export default {
                 lastNotify: status.lastNotify || null,
             });
         }
+        // 手动触发入口：可用 fetch 直接跑一次监控（生产环境没有触发 scheduled 的按钮）
+        if (url.pathname === '/run') {
+            try {
+                await runMonitor(env);
+                const status = await readStatus(env);
+                return jsonResponse({
+                    ok: true,
+                    message: '已手动触发一次监控',
+                    lastRun: status.lastRun || null,
+                    lastNotify: status.lastNotify || null,
+                });
+            } catch (e) {
+                return jsonResponse({ ok: false, error: e.message }, 500);
+            }
+        }
         return new Response('Not Found', { status: 404, headers: corsHeaders });
     },
 };
@@ -108,60 +129,66 @@ export default {
  * 主流程：遍历账户 → 遍历启用产品 → 查询指标 → 逐指标做阈值检查。
  */
 async function runMonitor(env) {
-    let edges = [];
+    const notifyLog = [];
     try {
-        edges = JSON.parse(env.EDGE || '[]');
-    } catch (e) {
-        console.error('EDGE 环境变量格式错误:', e);
-        return;
-    }
-    if (!Array.isArray(edges) || edges.length === 0) {
-        console.error('没有配置账户信息 (EDGE)');
-        return;
-    }
-
-    const products = parseMonitorProducts(env);
-
-    for (const account of edges) {
-        const { token, accountId, name } = account;
-        const acct = { accountName: name || accountId, accountId };
-        if (!token || !accountId) {
-            console.error('账户缺少 token 或 accountId:', name);
-            continue;
+        let edges = [];
+        try {
+            edges = JSON.parse(env.EDGE || '[]');
+        } catch (e) {
+            throw new Error(`EDGE 环境变量格式错误: ${e.message}`);
         }
-        for (const product of products) {
-            const def = FREE[product];
-            if (!def) continue;
-            let metrics;
-            try {
-                metrics = await FETCHERS[product](token, accountId);
-            } catch (e) {
-                console.error(`账户「${name || accountId}」产品 ${product} 查询失败:`, e);
+        if (!Array.isArray(edges) || edges.length === 0) {
+            throw new Error('没有配置账户信息 (EDGE)');
+        }
+
+        const products = parseMonitorProducts(env);
+
+        for (const account of edges) {
+            const { token, accountId, name } = account;
+            const acct = { accountName: name || accountId, accountId };
+            if (!token || !accountId) {
+                console.error('账户缺少 token 或 accountId:', name);
                 continue;
             }
-            const periodKey = getPeriodKey(def.period);
-            for (const [metricKey, meta] of Object.entries(def.metrics)) {
+            for (const product of products) {
+                const def = FREE[product];
+                if (!def) continue;
+                let metrics;
                 try {
-                    await checkProductMetric(
-                        env, acct, product, metricKey,
-                        metrics[metricKey] || 0, meta, periodKey
-                    );
+                    metrics = await FETCHERS[product](token, accountId);
                 } catch (e) {
-                    console.error(`检查 ${product}/${metricKey} 失败:`, e);
+                    console.error(`账户「${name || accountId}」产品 ${product} 查询失败:`, e);
+                    continue;
+                }
+                const periodKey = getPeriodKey(def.period);
+                for (const [metricKey, meta] of Object.entries(def.metrics)) {
+                    try {
+                        await checkProductMetric(
+                            env, acct, product, metricKey,
+                            metrics[metricKey] || 0, meta, periodKey, notifyLog
+                        );
+                    } catch (e) {
+                        console.error(`检查 ${product}/${metricKey} 失败:`, e);
+                    }
                 }
             }
         }
+    } finally {
+        // lastRun 每次运行都更新；lastNotify 仅在本次真正触发通知时更新，未通知则保留上次需通知时的状态
+        const lastNotify = notifyLog.length ? {
+            time: notifyLog[notifyLog.length - 1].time,
+            count: notifyLog.length,
+            attempts: notifyLog,
+        } : undefined;
+        await writeStatus(env, new Date().toISOString(), lastNotify);
     }
-
-    // 记录本次定时运行结束时间，供 / 状态页读取
-    await writeStatus(env, { lastRun: new Date().toISOString() }, true);
 }
 
 /**
  * 通用阈值检查：低于最低阈值不读 KV；仅在跨越新阈值时推送一次并写一次标志位。
  * alert:false 的非计费指标直接跳过。
  */
-async function checkProductMetric(env, acct, product, metricKey, value, meta, periodKey) {
+async function checkProductMetric(env, acct, product, metricKey, value, meta, periodKey, notifyLog) {
     if (meta && meta.alert === false) return; // 非计费指标：仅展示，不告警
     const quota = meta?.quota;
     const thresholds = computeThresholds(env, product, metricKey, meta);
@@ -185,11 +212,18 @@ async function checkProductMetric(env, acct, product, metricKey, value, meta, pe
     if (crossed.length === 0) return;
 
     const label = (METRIC_LABELS[product] && METRIC_LABELS[product][metricKey]) || metricKey;
-    await sendNotifications(
+    const channels = await sendNotifications(
         env,
         `☁️ CF ${product.toUpperCase()} 用量提醒`,
         buildContent(acct, product, label, value, meta?.unit, crossed, periodKey)
     );
+    // 累计本次运行的发送尝试，供 runMonitor 末尾统一写入状态
+    notifyLog.push({
+        time: new Date().toISOString(),
+        title: `${product.toUpperCase()} · ${label}`,
+        crossed,
+        channels,
+    });
 
     try {
         const merged = [...notified, ...crossed].sort((a, b) => a - b);
@@ -272,25 +306,18 @@ function formatBytes(bytes) {
     return v.toFixed(2) + ' ' + units[i];
 }
 
-/** 持久化运行状态到 KV（仅写我们关心的字段，merge：false 用 replace=true 只覆盖本次要写的字段，避免互相覆盖） */
-async function writeStatus(env, patch, replace = false) {
+/**
+ * 持久化运行状态：lastRun（本次运行结束时间，总是更新）；
+ * lastNotify（本次触发的发送尝试）。传入 undefined 表示不改变，保留上次需通知时的状态。
+ */
+async function writeStatus(env, lastRun, lastNotify) {
     if (!env.KV_STATE) return;
-    if (replace) {
-        // 运行结束：仅覆盖 lastRun，保留 lastNotify
-        await mergeStatus(env, { lastRun: patch.lastRun });
-    } else {
-        // 通知发送后：仅覆盖 lastNotify，保留 lastRun
-        await mergeStatus(env, { lastNotify: patch });
-    }
-}
-
-async function mergeStatus(env, patch) {
-    const now = await readStatus(env);
-    const merged = {
-        lastRun: patch.lastRun !== undefined ? patch.lastRun : now.lastRun,
-        lastNotify: patch.lastNotify !== undefined ? patch.lastNotify : now.lastNotify,
-    };
     try {
+        const prev = await readStatus(env);
+        const merged = {
+            lastRun,
+            lastNotify: lastNotify === undefined ? prev.lastNotify : lastNotify,
+        };
         await env.KV_STATE.put('monitor:status', JSON.stringify(merged));
     } catch (e) {
         console.error('写入状态 KV 失败:', e);
@@ -309,12 +336,12 @@ async function readStatus(env) {
     }
 }
 
-/** 分别发送 Server酱 + Telegram，各自独立 try/catch，互不影响、不抛错阻塞 */
+/** 分别发送 Server酱 + Telegram，各自独立 try/catch；返回本次各渠道尝试结果 */
 async function sendNotifications(env, title, content) {
-    const results = {};
+    const channels = {};
 
     if (env.SERVERCHAN_KEY) {
-        results.serverchan = { ok: false };
+        channels.serverchan = { configured: true, ok: false };
         try {
             const body = new URLSearchParams({ title, desp: content });
             const resp = await fetch(`https://sctapi.ftqq.com/${env.SERVERCHAN_KEY}.send`, {
@@ -323,20 +350,20 @@ async function sendNotifications(env, title, content) {
                 body,
             });
             if (resp.ok) {
-                results.serverchan.ok = true;
+                channels.serverchan.ok = true;
                 console.log('Server酱 通知发送成功');
             } else {
-                results.serverchan.error = (await resp.text()).slice(0, 300);
-                console.error('Server酱 发送失败:', results.serverchan.error);
+                channels.serverchan.error = (await resp.text()).slice(0, 300);
+                console.error('Server酱 发送失败:', channels.serverchan.error);
             }
         } catch (e) {
-            results.serverchan.error = e.message;
+            channels.serverchan.error = e.message;
             console.error('Server酱 发送错误:', e);
         }
     }
 
     if (env.TG_BOT_TOKEN && env.TG_CHAT_ID) {
-        results.telegram = { ok: false };
+        channels.telegram = { configured: true, ok: false };
         try {
             const resp = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
                 method: 'POST',
@@ -344,20 +371,19 @@ async function sendNotifications(env, title, content) {
                 body: JSON.stringify({ chat_id: env.TG_CHAT_ID, text: content, parse_mode: 'Markdown' }),
             });
             if (resp.ok) {
-                results.telegram.ok = true;
+                channels.telegram.ok = true;
                 console.log('Telegram 通知发送成功');
             } else {
-                results.telegram.error = (await resp.text()).slice(0, 300);
-                console.error('Telegram 发送失败:', results.telegram.error);
+                channels.telegram.error = (await resp.text()).slice(0, 300);
+                console.error('Telegram 发送失败:', channels.telegram.error);
             }
         } catch (e) {
-            results.telegram.error = e.message;
+            channels.telegram.error = e.message;
             console.error('Telegram 发送错误:', e);
         }
     }
 
-    // 持久化最近一次通知结果，供 / 状态页读取
-    await writeStatus(env, { time: new Date().toISOString(), channels: results });
+    return channels;
 }
 
 // ---------- 各产品 GraphQL 取数 ----------
