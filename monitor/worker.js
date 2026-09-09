@@ -91,7 +91,14 @@ export default {
     async fetch(request, env, ctx) {
         const url = new URL(request.url);
         if (url.pathname === '/') {
-            return jsonResponse({ ok: true, service: 'cf-monitor', message: '阈值监控 Worker 正常运行' });
+            const status = await readStatus(env);
+            return jsonResponse({
+                ok: true,
+                service: 'cf-monitor',
+                message: '阈值监控 Worker 正常运行',
+                lastRun: status.lastRun || null,
+                lastNotify: status.lastNotify || null,
+            });
         }
         return new Response('Not Found', { status: 404, headers: corsHeaders });
     },
@@ -145,6 +152,9 @@ async function runMonitor(env) {
             }
         }
     }
+
+    // 记录本次定时运行结束时间，供 / 状态页读取
+    await writeStatus(env, { lastRun: new Date().toISOString() }, true);
 }
 
 /**
@@ -262,9 +272,49 @@ function formatBytes(bytes) {
     return v.toFixed(2) + ' ' + units[i];
 }
 
+/** 持久化运行状态到 KV（仅写我们关心的字段，merge：false 用 replace=true 只覆盖本次要写的字段，避免互相覆盖） */
+async function writeStatus(env, patch, replace = false) {
+    if (!env.KV_STATE) return;
+    if (replace) {
+        // 运行结束：仅覆盖 lastRun，保留 lastNotify
+        await mergeStatus(env, { lastRun: patch.lastRun });
+    } else {
+        // 通知发送后：仅覆盖 lastNotify，保留 lastRun
+        await mergeStatus(env, { lastNotify: patch });
+    }
+}
+
+async function mergeStatus(env, patch) {
+    const now = await readStatus(env);
+    const merged = {
+        lastRun: patch.lastRun !== undefined ? patch.lastRun : now.lastRun,
+        lastNotify: patch.lastNotify !== undefined ? patch.lastNotify : now.lastNotify,
+    };
+    try {
+        await env.KV_STATE.put('monitor:status', JSON.stringify(merged));
+    } catch (e) {
+        console.error('写入状态 KV 失败:', e);
+    }
+}
+
+/** 读取持久化状态（不存在返回空对象） */
+async function readStatus(env) {
+    if (!env.KV_STATE) return {};
+    try {
+        const raw = await env.KV_STATE.get('monitor:status');
+        return raw ? JSON.parse(raw) : {};
+    } catch (e) {
+        console.error('读取状态 KV 失败:', e);
+        return {};
+    }
+}
+
 /** 分别发送 Server酱 + Telegram，各自独立 try/catch，互不影响、不抛错阻塞 */
 async function sendNotifications(env, title, content) {
+    const results = {};
+
     if (env.SERVERCHAN_KEY) {
+        results.serverchan = { ok: false };
         try {
             const body = new URLSearchParams({ title, desp: content });
             const resp = await fetch(`https://sctapi.ftqq.com/${env.SERVERCHAN_KEY}.send`, {
@@ -272,24 +322,42 @@ async function sendNotifications(env, title, content) {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body,
             });
-            if (!resp.ok) console.error('Server酱 发送失败:', await resp.text());
+            if (resp.ok) {
+                results.serverchan.ok = true;
+                console.log('Server酱 通知发送成功');
+            } else {
+                results.serverchan.error = (await resp.text()).slice(0, 300);
+                console.error('Server酱 发送失败:', results.serverchan.error);
+            }
         } catch (e) {
+            results.serverchan.error = e.message;
             console.error('Server酱 发送错误:', e);
         }
     }
 
     if (env.TG_BOT_TOKEN && env.TG_CHAT_ID) {
+        results.telegram = { ok: false };
         try {
             const resp = await fetch(`https://api.telegram.org/bot${env.TG_BOT_TOKEN}/sendMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ chat_id: env.TG_CHAT_ID, text: content, parse_mode: 'Markdown' }),
             });
-            if (!resp.ok) console.error('Telegram 发送失败:', await resp.text());
+            if (resp.ok) {
+                results.telegram.ok = true;
+                console.log('Telegram 通知发送成功');
+            } else {
+                results.telegram.error = (await resp.text()).slice(0, 300);
+                console.error('Telegram 发送失败:', results.telegram.error);
+            }
         } catch (e) {
+            results.telegram.error = e.message;
             console.error('Telegram 发送错误:', e);
         }
     }
+
+    // 持久化最近一次通知结果，供 / 状态页读取
+    await writeStatus(env, { time: new Date().toISOString(), channels: results });
 }
 
 // ---------- 各产品 GraphQL 取数 ----------
