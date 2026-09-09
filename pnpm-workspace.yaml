@@ -1,0 +1,4 @@
+# pnpm 构建脚本审批（wrangler 本地模拟边缘环境需要 workerd 二进制）
+allowBuilds:
+  esbuild: true
+  workerd: true

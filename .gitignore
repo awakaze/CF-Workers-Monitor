@@ -1,0 +1,9 @@
+node_modules/
+
+# wrangler 本地缓存/生成物，勿提交
+.wrangler/
+
+# 本地密钥文件（含 EDGE 等敏感信息），勿提交
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

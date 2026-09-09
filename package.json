@@ -1,0 +1,15 @@
+{
+  "name": "cf-workers-monitor",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:pages": "wrangler pages dev public --port 8788",
+    "dev:monitor": "wrangler dev -c monitor/wrangler.toml --test-scheduled --port 8787",
+    "deploy:monitor": "wrangler deploy -c monitor/wrangler.toml",
+    "deploy:pages": "wrangler pages deploy public",
+    "secret:put": "wrangler secret put"
+  },
+  "devDependencies": {
+    "wrangler": "^4.14.0"
+  }
+}
