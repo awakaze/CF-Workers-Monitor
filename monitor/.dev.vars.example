@@ -1,0 +1,12 @@
+# 监控 Worker 本地测试配置（monitor/ 目录）
+# 复制本文件为 .dev.vars 并填入真实值（.dev.vars 已被 .gitignore 忽略）
+# 启动：pnpm dev:monitor
+# 手动触发监控：访问 http://localhost:8787/__scheduled?cron=0+*+*+*+*
+#
+# 非敏感参数（MONITOR_PRODUCTS / THRESHOLDS / THRESHOLD_* 等）配置在
+# monitor/wrangler.toml 的 [vars] 或注释示例中，不用放这里。
+# 敏感账户信息只放本文件（本地）与 Cloudflare secret（生产），勿写入 wrangler.toml / 仓库其他文件
+EDGE=[{"name":"账户1","token":"你的Cloudflare API Token","accountId":"你的账户ID"}]
+SERVERCHAN_KEY=
+TG_BOT_TOKEN=
+TG_CHAT_ID=
