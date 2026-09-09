@@ -466,8 +466,12 @@ async function getBillingCycle(token, accountId) {
         let startMs = null;
         const pEnd = chosen.current_period_end || chosen.end_timestamp;
         if (pEnd) {
-            // 有本周期结束时间：单周期为 30 天，起点 = 结束 - 30 天
-            startMs = new Date(pEnd).getTime() - 30 * DAY;
+            // 有本周期结束时间：单周期为 30 天，起点 = 结束 - 30 天。
+            // current_period_end 为 "MM/DD/YYYY HH:MM:SS" 无常时区字符串，new Date 会按运行时本地时区解析
+            // （dev=UTC+8 / 生产=UTC 会差 8 小时）；统一按 UTC 中的该日期 00:00 解析，保证跨环境一致
+            const mm = /^(\d{2})\/(\d{2})\/(\d{4})/.exec(String(pEnd));
+            const endUtc = mm ? Date.UTC(+mm[3], +mm[1] - 1, +mm[2]) : new Date(pEnd).getTime();
+            startMs = endUtc - 30 * DAY;
         } else if (chosen.billing_cycle_anchor_timestamp) {
             // 只有账单元日：以 30 天为步长对齐到 <= now 的最近周期起点
             let s = new Date(chosen.billing_cycle_anchor_timestamp).getTime();
@@ -637,9 +641,10 @@ async function listPagesProjects(token, accountId) {
     return projects;
 }
 
-/** Pages：本月构建次数（按 /deployments 的 created_on 统计，配额 500 次/月，按账单周期） */
+/** Pages：本月构建次数（按 /deployments 的 created_on 统计，配额 500 次/月，自然月重置） */
 async function getPagesBuildsStats(token, accountId, cycle) {
-    const monthStartIso = (cycle && cycle.startISO) || periodStart('month'); // 当前账单周期起点（降级为当月1日 UTC 00:00）
+    // Pages 构建数按 CF 免费套餐口径：自然月（当月1日 UTC 00:00）重置，而非订阅账单周期
+    const monthStartIso = periodStart('month');
     const base = 'https://api.cloudflare.com/client/v4/accounts';
     const projects = await listPagesProjects(token, accountId);
     let builds = 0;
