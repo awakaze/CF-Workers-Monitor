@@ -3,9 +3,6 @@ node_modules/
 # wrangler 本地缓存/生成物，勿提交
 .wrangler/
 
-# 本机 wrangler 配置（含本机专属 KV id），勿提交；公开模板见 monitor/wrangler.toml.example
-monitor/wrangler.toml
-
 # 本地密钥文件（含 EDGE 等敏感信息），勿提交
 .dev.vars
 .dev.vars.*

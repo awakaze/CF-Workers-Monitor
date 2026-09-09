@@ -1,0 +1,42 @@
+# CF-Workers-Monitor 阈值监控 Worker 配置
+# 部署方式一（推荐）：Cloudflare 控制台 Workers → Git 集成，构建命令 `npx wrangler deploy -c monitor/wrangler.toml`，push 自动部署
+# 部署方式二（备选）：项目根目录执行 `pnpm deploy:monitor`
+# 说明：KV 命名空间 id 非敏感（仅资源标识，读写需 API Token），可入库；他人使用请替换为自己创建的命名空间 id。
+# 敏感变量（EDGE / TG_BOT_TOKEN 等）请配置在 Cloudflare 控制台 Secrets 或本地 .dev.vars，勿写入本文件。
+
+name = "cf-workers-monitor-monitor"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# KV 命名空间绑定（存储"周期内已通知阈值"标志位）
+# 1. 在 Cloudflare 控制台创建 KV 命名空间（如 cf-monitor-state）
+# 2. 把命名空间 ID 填到下方 id 位置（当前为作者本机创建，他人使用请替换）
+kv_namespaces = [
+  { binding = "KV_STATE", id = "9840b706957540a38a2d6a6d6574ab4e" }
+]
+
+# 定时任务：默认每小时整点检查一次阈值并推送通知
+# 注意：保持注释，Cron 在 Cloudflare 控制台 Triggers 管理，避免 push 重新部署时覆盖控制台修改。
+# [triggers]
+# crons = ["0 * * * *"]
+
+# 静态变量（非敏感，可在此处配置；会覆盖代码默认值）
+# 启用产品：workers/kv/r2/d1/pages 逗号分隔，默认全开
+# MONITOR_PRODUCTS = "workers,kv,r2,d1,pages"
+# 兼容旧版：仅对 workers/requests 生效
+# THRESHOLDS = "100000,50000,20000,10000"
+# 自定义某产品某指标阈值（绝对数值，逗号分隔升序；设 "0" 表示不监控该指标）
+# 未配置时使用代码内的合理默认阈值，示例：
+# THRESHOLD_PAGES_BUILDS = "250,400,475"          # Pages 构建（月）
+# THRESHOLD_KV_WRITES = "800,900,1000"
+# THRESHOLD_R2_CLASSAOPERATIONS = "800000,950000" # R2 A类操作（月）
+# THRESHOLD_R2_CLASSBOPERATIONS = "8000000,9500000" # R2 B类操作（月）
+# THRESHOLD_D1_ROWSREAD = "4000000,4750000"
+# 以上阈值也可在控制台 Variables and Secrets 中设置同名变量覆盖，优先级更高，且不会被 push 覆盖。
+
+# 敏感变量请用 Cloudflare 控制台 Secrets 设置（Worker → Settings → Variables and Secrets）：
+#   EDGE            # 账户数组 JSON（必需）
+#   SERVERCHAN_KEY  # Server酱 SendKey（可选）
+#   TG_BOT_TOKEN    # Telegram Bot Token（可选）
+#   TG_CHAT_ID      # Telegram 接收 chat id（可选）
+# 本地开发时放在 monitor/.dev.vars（已被 .gitignore 忽略）
