@@ -1,5 +1,5 @@
 # CF-Workers-Monitor 阈值监控 Worker 配置
-# 部署方式一（推荐）：Cloudflare 控制台 Workers → Git 集成，构建命令 `npx wrangler deploy -c monitor/wrangler.toml`，push 自动部署
+# 部署方式一（推荐）：Cloudflare 控制台 Workers → Git 集成，部署命令 `pnpm deploy:monitor`，push 自动部署
 # 部署方式二（备选）：项目根目录执行 `pnpm deploy:monitor`
 # 说明：KV 命名空间 id 非敏感（仅资源标识，读写需 API Token），可入库；他人使用请替换为自己创建的命名空间 id。
 # 敏感变量（EDGE / TG_BOT_TOKEN 等）请配置在 Cloudflare 控制台 Secrets 或本地 .dev.vars，勿写入本文件。

@@ -174,7 +174,7 @@ Cloudflare Workers/Pages 用量监控
 
 **3.** 创建 Worker（推荐 Git 集成，push 自动部署）
 1. Cloudflare 控制台 → Workers & Pages → Create → 选择 GitHub 仓库。
-2. 构建命令填：`npx wrangler deploy -c monitor/wrangler.toml`，点保存并部署。
+2. 部署命令填：`pnpm deploy:monitor`（等价 `wrangler deploy -c monitor/wrangler.toml`，使用项目锁定的 wrangler 版本），点保存并部署。
 3. 之后每次 push 到 main 自动重新部署。
 4. 添加 Cron：进入该 Worker → Settings → Triggers → Cron Triggers，添加 `0 * * * *`（每小时整点）。Cron 未在 toml 声明，故控制台配置不会被 push 覆盖。
 
