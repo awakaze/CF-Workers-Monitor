@@ -1,0 +1,6 @@
+# Pages 仪表盘本地测试配置（根目录）
+# 复制本文件为 .dev.vars 并填入真实值（.dev.vars 已被 .gitignore 忽略）
+# 启动：pnpm dev:pages
+# 敏感账户信息只放本文件（本地）与 Cloudflare secret（生产），勿写入 wrangler.toml / 仓库其他文件
+# total 可省略（默认 100000，仅用于仪表盘进度条基准）
+EDGE=[{"name":"账户1","token":"你的Cloudflare API Token","accountId":"你的账户ID"}]
