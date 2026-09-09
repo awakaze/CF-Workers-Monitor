@@ -1,4 +1,9 @@
-# pnpm 构建脚本审批（wrangler 本地模拟边缘环境需要 workerd 二进制）
+# pnpm 配置（pnpm 10 收敛到本文件）
+# packages 必须显式声明非空，否则 CI 的 pnpm install 报 "packages field missing or empty"
+packages:
+  - '.'
+
+# 构建脚本审批：esbuild/wrangler 部署打包需 esbuild 原生二进制；本地边缘模拟需 workerd 二进制
 allowBuilds:
   esbuild: true
   workerd: true
