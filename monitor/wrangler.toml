@@ -38,11 +38,12 @@ kv_namespaces = [
 # THRESHOLD_D1_ROWSREAD = "4000000,4750000"
 # 以上阈值也可在控制台 Variables and Secrets 中设置同名变量覆盖，优先级更高，且不会被 push 覆盖。
 
-# 敏感变量请用 Cloudflare 控制台 Secrets 设置（Worker → Settings → Variables and Secrets）：
+# 敏感变量请用 Cloudflare 控制台 Secrets 设置（Worker → Settings → Variables and Secrets），或用 pnpm secret:put：
 #   EDGE            # 账户数组 JSON（必需）
 #   SERVERCHAN_KEY  # Server酱 SendKey（可选）
 #   TG_BOT_TOKEN    # Telegram Bot Token（可选）
 #   TG_CHAT_ID      # Telegram 接收 chat id（可选）
+#   AUTH_TOKEN      # /run 手动触发入口的鉴权密钥（请求头 X-Auth-Token 需与之一致；可选。未配置则 /run 一律返回 403，fail-closed 安全默认）
 # 本地开发时放在 monitor/.dev.vars（已被 .gitignore 忽略）
 
 # 可观测性：收集调用日志并保留到 Workers 仪表板（防止 push 部署时日志配置被覆盖重置）

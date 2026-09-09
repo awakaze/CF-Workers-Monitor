@@ -124,6 +124,7 @@ Cloudflare Workers/Pages 用量监控
 |SERVERCHAN_KEY|密钥|否|Server酱(微信) SendKey，配置后启用微信推送|
 |TG_BOT_TOKEN|密钥|否|Telegram 机器人 Token，配置后启用 TG 推送|
 |TG_CHAT_ID|文本|否|Telegram 接收人 chat id（与 TG_BOT_TOKEN 一起配置）|
+|AUTH_TOKEN|密钥|否|监控 Worker `/run` 手动触发入口的鉴权密钥：请求头 `X-Auth-Token` 需等于该值才执行；**未配置则 `/run` 一律返回 403**（安全默认）。点击 GET 全局鉴权不生效，仅保护 `/run`|
 
 > 说明：`EDGE`、`MONITOR_PRODUCTS`、`THRESHOLDS`、`THRESHOLD_*`、通知令牌为**监控 Worker** 的配置；`EDGE` 同时也是 **Pages 仪表盘**的配置。KV 命名空间绑定名为 `KV_STATE`，仅在监控 Worker 上绑定。
 
@@ -224,7 +225,7 @@ Cloudflare Workers/Pages 用量监控
 | 文件 | 给谁用 | 需填字段 |
 |--|--|--|
 | 根目录 `.dev.vars`（由 `.dev.vars.example` 复制） | Pages 仪表盘本地（`pnpm dev:pages`） | `EDGE`（账户数组 JSON：`name`/`token`/`accountId`，`total` 可选） |
-| `monitor/.dev.vars`（由 `monitor/.dev.vars.example` 复制） | 监控 Worker 本地（`pnpm dev:monitor`） | `EDGE` + 可选 `SERVERCHAN_KEY`/`TG_BOT_TOKEN`/`TG_CHAT_ID` |
+| `monitor/.dev.vars`（由 `monitor/.dev.vars.example` 复制） | 监控 Worker 本地（`pnpm dev:monitor`） | `EDGE` + 可选 `SERVERCHAN_KEY`/`TG_BOT_TOKEN`/`TG_CHAT_ID`/`AUTH_TOKEN` |
 
 > ⚠️ `.dev.vars` 已被 `.gitignore` 忽略、不会提交；模板 `.dev.vars.example` 会提交、仅含占位符。敏感值只放进本文件或生产 secret，**切勿写入 `wrangler.toml` 或仓库其他文件**。
 
@@ -233,10 +234,16 @@ Cloudflare Workers/Pages 用量监控
 | 位置 | 填什么 |
 |--|--|
 | Pages 控制台 → Settings → Environment Variables | `EDGE`（账户数组 JSON） |
-| Worker → Settings → Variables and Secrets（Secrets 区） | `EDGE`（必需）、`SERVERCHAN_KEY`、`TG_BOT_TOKEN`、`TG_CHAT_ID`（可选） |
+| Worker → Settings → Variables and Secrets（Secrets 区） | `EDGE`（必需）、`SERVERCHAN_KEY`、`TG_BOT_TOKEN`、`TG_CHAT_ID`、`AUTH_TOKEN`（可选） |
 | Worker → Settings → Variables and Secrets（Variables 区） | 可选覆盖：`MONITOR_PRODUCTS`、`THRESHOLD_*` 等非敏感项 |
 | Worker → Settings → Triggers → Cron Triggers | `0 * * * *`（每小时整点；**务必添加**，否则 Worker 不会自动运行） |
 | 控制台 → Workers & Pages → KV | 新建命名空间（如 `cf-monitor-state`），把其 ID 填回 `monitor/wrangler.toml` 的 `kv_namespaces.id` |
+
+**安全与运维说明**
+
+- **鉴权范围**：仅监控 Worker 的 `/run` 手动触发入口受 `AUTH_TOKEN` 保护（高代价入口，防匿名触发放大配额消耗）。`/` 根状态页与 Pages 仪表盘 `/api` **保持公开**——仪表盘是静态页，前端在浏览器内请求 `/api`，若在前端放密钥则形同虚设，故不在 `/api` 上增加伪鉴权；如确有对外暴露隐私数据的顾虑，建议用 Cloudflare Access 在网关层做真正鉴权。
+- **KV 水位标志带 TTL**：告警去重键（`alert:...`）按产品周期写入并自动过期（日周期 2 天、月周期 32 天），账单周期降级键（`billingcycle:degraded:...`）32 天过期，避免 KV 条目无限累积。
+- **Pages 构建数口径**：按 `/deployments` 的 `created_on` **全部计入**本账期内的构建，包含失败/取消的部署——CF Free 套餐为 500 次/月，每次触发构建即消耗 1 次（官方未豁免失败构建），全量计入是偏保守、防计费风险的正确口径。
 
 ## 🚧 部署教程（阈值监控 Worker）
 
@@ -264,6 +271,7 @@ Cloudflare Workers/Pages 用量监控
 | SERVERCHAN_KEY | 否 | Server酱 SendKey |
 | TG_BOT_TOKEN | 否 | Telegram Bot Token |
 | TG_CHAT_ID | 否 | Telegram 接收 chat id |
+| AUTH_TOKEN | 否 | `/run` 鉴权密钥（请求头 `X-Auth-Token` 需与此一致；不配置则 `/run` 返回 403）。本地验证 `/run` 时先在 `.dev.vars` 设好 `AUTH_TOKEN` 并带 `-H "X-Auth-Token: <token>"` 触发，或改用 `http://localhost:8787/__scheduled?cron=0+*+*+*+*`（该方法不受 `/run` 鉴权限制） |
 
 阈值、监控产品等非敏感项也可在此添加变量覆盖默认值（如 `THRESHOLD_R2_CLASSBOPERATIONS="8000000,9500000"`、`MONITOR_PRODUCTS="workers,kv,r2,d1,pages"`），控制台变量优先级高于代码默认值，且不会被 push 覆盖。
 
@@ -299,6 +307,7 @@ EDGE=[{"name":"账户1","token":"你的API Token","accountId":"你的账户ID","
 SERVERCHAN_KEY=你的SendKey
 TG_BOT_TOKEN=你的BotToken
 TG_CHAT_ID=你的ChatId
+AUTH_TOKEN=你的Run触发密钥（可选，用于 /run 鉴权）
 ```
 
 非敏感参数（`MONITOR_PRODUCTS`、`THRESHOLDS`、`THRESHOLD_*`）配在 `monitor/wrangler.toml` 的 `[vars]` 或注释示例中，无需放入 `.dev.vars`。

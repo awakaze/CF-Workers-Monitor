@@ -10,3 +10,6 @@ EDGE=[{"name":"账户1","token":"你的Cloudflare API Token","accountId":"你的
 SERVERCHAN_KEY=
 TG_BOT_TOKEN=
 TG_CHAT_ID=
+# /run 手动触发入口的鉴权密钥：本地测试时访问 http://localhost:8787/run 需带请求头 X-Auth-Token: <AUTH_TOKEN>；
+# 不配置则 /run 一律返回 403（fail-closed）。生产环境用 wrangler secret put AUTH_TOKEN 或控制台 Secrets 设置，勿写仓库内提交。
+AUTH_TOKEN=
