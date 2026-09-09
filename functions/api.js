@@ -46,12 +46,13 @@ async function handleAPIRequest(request, env) {
         let result;
         if (getAllAccounts) {
             result = await getAllAccountsDataOptimized(EDGE);
-            if (isOptimized) {
+            // 有失败账户时不写缓存，避免 60 秒内刷新仍看到错误卡片
+            if (isOptimized && !result.accounts.some((a) => a.error)) {
                 cache.data = result;
                 cache.lastUpdated = now;
             }
         } else {
-            if (accountIndex >= EDGE.length) {
+            if (accountIndex < 0 || accountIndex >= EDGE.length) {
                 return jsonResponse({ error: '账户索引超出范围' }, 400);
             }
             result = await getAccountData(EDGE[accountIndex], accountIndex);
@@ -59,7 +60,8 @@ async function handleAPIRequest(request, env) {
         return jsonResponse(result);
     } catch (error) {
         console.error('Error:', error);
-        return jsonResponse({ error: error.message }, 500);
+        // 只返回通用错误，原始错误详情仅在服务端日志
+        return jsonResponse({ error: '服务器内部错误' }, 500);
     }
 }
 
@@ -85,19 +87,17 @@ async function getAccountData(account, accountIndex) {
     if (!token || !accountId) {
         throw new Error(`账户 ${accountIndex} 缺少 token 或 accountId`);
     }
-    const now = new Date();
-    now.setUTCHours(0, 0, 0, 0);
-    const startDate = now.toISOString();
-    const endDate = new Date().toISOString();
-    
-    const { pagesSum = 0, workersSum = 0 } = await getSum(token, accountId, startDate, endDate);
+
+    // 一次查询拿到 pages/workers 请求量与 workers 附加指标（合并后避免重复 GraphQL 调用）
+    const workersStats = await getWorkersStats(token, accountId);
+    const { pagesSum = 0, workersSum = 0 } = workersStats;
 
     // 月度产品（R2/Pages）免费额度按订阅账单周期重置，非自然月；取一次账户级账单元日
     const cycle = await getBillingCycle(token, accountId);
 
     let products = null;
     try {
-        products = await getAccountProducts(token, accountId, cycle);
+        products = await getAccountProducts(token, accountId, cycle, workersStats);
     } catch (e) {
         console.error(`账户 ${accountIndex} 多产品数据获取失败:`, e);
     }
@@ -199,64 +199,6 @@ async function getAccountDataWithRetry(account, accountIndex, maxRetries = 2) {
     }
 }
 
-async function getSum(token, accountId, startDate, endDate) {
-    const query = {
-        query: `query getBillingMetrics($accountId: string!, $filter: AccountWorkersInvocationsAdaptiveFilter_InputObject) {
-      viewer {
-        accounts(filter: {accountTag: $accountId}) {
-          pagesFunctionsInvocationsAdaptiveGroups(limit: 1000, filter: $filter) {
-            sum {
-              requests
-            }
-          }
-          workersInvocationsAdaptive(limit: 10000, filter: $filter) {
-            sum {
-              requests
-            }
-          }
-        }
-      }
-    }`,
-        variables: {
-            accountId,
-            filter: { datetime_geq: startDate, datetime_leq: endDate },
-        },
-    };
-    const response = await fetchWithRetry(
-        'https://api.cloudflare.com/client/v4/graphql',
-        {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`,
-            },
-            body: JSON.stringify(query),
-        },
-        2,
-        1000
-    );
-    if (!response.ok) {
-        throw new Error(`API 请求失败: ${response.status}`);
-    }
-    const data = await response.json();
-
-    if (data.errors) {
-        throw new Error(`GraphQL 错误: ${JSON.stringify(data.errors)}`);
-    }
-    const accounts = data?.data?.viewer?.accounts;
-    if (!accounts || accounts.length === 0) {
-        throw new Error('未找到账户数据');
-    }
-    const accountData = accounts[0];
-    const pagesGroups = accountData.pagesFunctionsInvocationsAdaptiveGroups || [];
-    const workersData = accountData.workersInvocationsAdaptive || [];
-    
-    const pagesSum = pagesGroups.reduce((sum, group) => sum + (group?.sum?.requests || 0), 0);
-    const workersSum = workersData.reduce((sum, item) => sum + (item?.sum?.requests || 0), 0);
-    
-    return { pagesSum, workersSum };
-}
-
 // ---------- 多产品用量（kv/r2/d1 及 workers 附加指标） ----------
 
 // 各产品指标：默认免费用量幅度（可按官方最新额度调整）
@@ -296,9 +238,9 @@ const PRODUCT_DEFS = {
     },
 };
 
-async function getAccountProducts(token, accountId, cycle) {
+async function getAccountProducts(token, accountId, cycle, workersStats = {}) {
     const [workers, kv, r2, d1, pages] = await Promise.allSettled([
-        getWorkersStats(token, accountId),
+        Promise.resolve(workersStats), // workers 附加指标已由 getAccountData 取过，直接复用
         getKvStats(token, accountId),
         getR2Stats(token, accountId, cycle),
         getD1Stats(token, accountId),
@@ -331,22 +273,28 @@ async function getAccountProducts(token, accountId, cycle) {
     };
 }
 
-/** Workers 附加指标（错误/子请求/CPU耗时）；请求量已由主流程统计 */
+/** Workers：页面请求数、附加指标（错误/子请求/CPU耗时），一次 GraphQL 查询 */
 async function getWorkersStats(token, accountId) {
     const start = dayStart();
     const end = new Date().toISOString();
     const account = await runGraphQL(token, `query getBillingMetrics($accountId: string!, $filter: AccountWorkersInvocationsAdaptiveFilter_InputObject) {
       viewer {
         accounts(filter: {accountTag: $accountId}) {
+          pagesFunctionsInvocationsAdaptiveGroups(limit: 1000, filter: $filter) {
+            sum { requests }
+          }
           workersInvocationsAdaptive(limit: 10000, filter: $filter) {
-            sum { errors subrequests cpuTimeUs }
+            sum { requests errors subrequests cpuTimeUs }
           }
         }
       }
     }`, { accountId, filter: { datetime_geq: start, datetime_leq: end } });
+    const pagesGroups = account.pagesFunctionsInvocationsAdaptiveGroups || [];
     const rows = account.workersInvocationsAdaptive || [];
     const sum = (f) => rows.reduce((a, r) => a + f(r?.sum), 0);
     return {
+        pagesSum: pagesGroups.reduce((a, g) => a + (g?.sum?.requests || 0), 0),
+        workersSum: sum((s) => s?.requests || 0),
         errors: sum((s) => s?.errors || 0),
         subrequests: sum((s) => s?.subrequests || 0),
         // GraphQL 返回微秒，转成毫秒展示
