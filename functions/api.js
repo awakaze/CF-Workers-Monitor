@@ -92,9 +92,12 @@ async function getAccountData(account, accountIndex) {
     
     const { pagesSum = 0, workersSum = 0 } = await getSum(token, accountId, startDate, endDate);
 
+    // 月度产品（R2/Pages）免费额度按订阅账单周期重置，非自然月；取一次账户级账单元日
+    const cycle = await getBillingCycle(token, accountId);
+
     let products = null;
     try {
-        products = await getAccountProducts(token, accountId);
+        products = await getAccountProducts(token, accountId, cycle);
     } catch (e) {
         console.error(`账户 ${accountIndex} 多产品数据获取失败:`, e);
     }
@@ -108,6 +111,7 @@ async function getAccountData(account, accountIndex) {
         pagesSum,
         workersSum,
         products,
+        billingCycleDegraded: !cycle, // 未能读到账单周期时为 true（当前按自然月近似展示）
         total,
         remaining,
         percent: Math.round(percent),
@@ -292,13 +296,13 @@ const PRODUCT_DEFS = {
     },
 };
 
-async function getAccountProducts(token, accountId) {
+async function getAccountProducts(token, accountId, cycle) {
     const [workers, kv, r2, d1, pages] = await Promise.allSettled([
         getWorkersStats(token, accountId),
         getKvStats(token, accountId),
-        getR2Stats(token, accountId),
+        getR2Stats(token, accountId, cycle),
         getD1Stats(token, accountId),
-        getPagesBuildsStats(token, accountId),
+        getPagesBuildsStats(token, accountId, cycle),
     ]);
     const pick = (r) => (r.status === 'fulfilled' ? r.value : {});
     const normalize = (raw, def) => {
@@ -395,9 +399,9 @@ function classifyR2Action(actionType) {
     return 'B';
 }
 
-/** R2：A类/B类操作次数 + 存储 */
-async function getR2Stats(token, accountId) {
-    const start = monthStart();
+/** R2：A类/B类操作次数 + 存储（账单周期，默认自然月降级） */
+async function getR2Stats(token, accountId, cycle) {
+    const start = (cycle && cycle.startISO) || monthStart();
     const end = new Date().toISOString();
     const account = await runGraphQL(token, `query r2Metrics($accountTag: string!, $start: Time, $end: Time) {
       viewer {
@@ -426,6 +430,50 @@ async function getR2Stats(token, accountId) {
 }
 
 const REST_BASE = 'https://api.cloudflare.com/client/v4/accounts';
+
+/**
+ * 读取账户的市值计费周期：调用 subscriptions 接口取"当前账单周期"起点。
+ * 月度免费额度（R2/Pages 等）按订阅账单元日重置，而非自然月；
+ * 以订阅提供的时间源推导当前周期起点（30 天滚动对齐）。失败返回 null（调用方降级为自然月）。
+ */
+async function getBillingCycle(token, accountId) {
+    try {
+        const resp = await fetchWithRetry(`${REST_BASE}/${accountId}/subscriptions`, {
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        }, 2, 1000);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (!data.success || !Array.isArray(data.result)) return null;
+
+        const subs = data.result.filter((s) =>
+            s && (s.billing_cycle_anchor_timestamp || s.current_period_end || s.end_timestamp)
+        );
+        if (!subs.length) return null;
+
+        const isPlatform = (s) => /worker|platform|pages/i
+            .test(String(s.rate_plan?.id || s.rate_plan?.name || s.id || ''));
+        const chosen = subs.find(isPlatform) || subs[0];
+
+        const DAY = 24 * 3600 * 1000;
+        const now = Date.now();
+        let startMs = null;
+        const pEnd = chosen.current_period_end || chosen.end_timestamp;
+        if (pEnd) {
+            startMs = new Date(pEnd).getTime() - 30 * DAY;
+        } else if (chosen.billing_cycle_anchor_timestamp) {
+            let s = new Date(chosen.billing_cycle_anchor_timestamp).getTime();
+            while (s + 30 * DAY <= now) s += 30 * DAY;
+            while (s > now) s -= 30 * DAY;
+            startMs = s;
+        }
+        if (!startMs || isNaN(startMs)) return null;
+
+        const start = new Date(startMs);
+        return { startISO: start.toISOString(), anchorDay: dateStr(start) };
+    } catch (e) {
+        return null;
+    }
+}
 
 /** 通用 REST GET：分页拉全，回调每页 result（不传 per_page，用 Cloudflare 默认页大小并只翻 page） */
 async function restPaginate(token, accountId, path, onPage, fields = {}) {
@@ -456,9 +504,9 @@ async function listPagesProjects(token, accountId) {
     return projects;
 }
 
-/** Pages：本月构建次数（按 /deployments 的 created_on 统计，配额 500 次/月） */
-async function getPagesBuildsStats(token, accountId) {
-    const monthStartIso = monthStart(); // 当月1日 UTC 00:00
+/** Pages：本月构建次数（按 /deployments 的 created_on 统计，配额 500 次/月，按账单周期） */
+async function getPagesBuildsStats(token, accountId, cycle) {
+    const monthStartIso = (cycle && cycle.startISO) || monthStart(); // 当前账单周期起点（降级为当月1日 UTC 00:00）
     const projects = await listPagesProjects(token, accountId);
     let builds = 0;
     for (const proj of projects) {

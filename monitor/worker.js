@@ -150,17 +150,23 @@ async function runMonitor(env) {
                 console.error('账户缺少 token 或 accountId:', name);
                 continue;
             }
+            // 月度产品（R2/Pages）免费额度按订阅账单周期重置；取一次账户级账单元日，供月度统计与去重
+            const monthEnabled = products.some((p) => FREE[p] && FREE[p].period === 'month');
+            const cycle = monthEnabled ? await getBillingCycle(token, accountId) : null;
+            if (monthEnabled && !cycle) {
+                await notifyBillingCycleDegraded(env, acct);
+            }
             for (const product of products) {
                 const def = FREE[product];
                 if (!def) continue;
                 let metrics;
                 try {
-                    metrics = await FETCHERS[product](token, accountId);
+                    metrics = await FETCHERS[product](token, accountId, cycle);
                 } catch (e) {
                     console.error(`账户「${name || accountId}」产品 ${product} 查询失败:`, e);
                     continue;
                 }
-                const periodKey = getPeriodKey(def.period);
+                const periodKey = (def.period === 'month' && cycle) ? cycle.anchorDay : getPeriodKey(def.period);
                 for (const [metricKey, meta] of Object.entries(def.metrics)) {
                     try {
                         await checkProductMetric(
@@ -420,6 +426,77 @@ function dateStr(d) {
     return d.toISOString().split('T')[0];
 }
 
+const REST_BASE = 'https://api.cloudflare.com/client/v4/accounts';
+
+/**
+ * 读取账户的市值计费周期：调用 subscriptions 接口取"当前账单周期"起点。
+ * 月度免费额度（R2/Pages 等）按订阅账单元日重置，而非自然月；
+ * 故以订阅提供的时间源推导当前周期起点（30 天滚动对齐），供 R2/Pages 统计与去重。
+ * 失败（接口不可用 / Token 无权限 / 无账号级订阅）返回 null，由调用方降级为自然月并告警。
+ */
+async function getBillingCycle(token, accountId) {
+    try {
+        const resp = await fetchWithRetry(`${REST_BASE}/${accountId}/subscriptions`, {
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        }, 2, 1000);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (!data.success || !Array.isArray(data.result)) return null;
+
+        const subs = data.result.filter((s) =>
+            s && (s.billing_cycle_anchor_timestamp || s.current_period_end || s.end_timestamp)
+        );
+        if (!subs.length) return null;
+
+        // 优先账号级平台订阅（workers/platform/pages），退而取第一个有周期信息的订阅
+        const isPlatform = (s) => /worker|platform|pages/i
+            .test(String(s.rate_plan?.id || s.rate_plan?.name || s.id || ''));
+        const chosen = subs.find(isPlatform) || subs[0];
+
+        const DAY = 24 * 3600 * 1000;
+        const now = Date.now();
+        let startMs = null;
+        const pEnd = chosen.current_period_end || chosen.end_timestamp;
+        if (pEnd) {
+            // 有本周期结束时间：单周期为 30 天，起点 = 结束 - 30 天
+            startMs = new Date(pEnd).getTime() - 30 * DAY;
+        } else if (chosen.billing_cycle_anchor_timestamp) {
+            // 只有账单元日：以 30 天为步长对齐到 <= now 的最近周期起点
+            let s = new Date(chosen.billing_cycle_anchor_timestamp).getTime();
+            while (s + 30 * DAY <= now) s += 30 * DAY;
+            while (s > now) s -= 30 * DAY;
+            startMs = s;
+        }
+        if (!startMs || isNaN(startMs)) return null;
+
+        const start = new Date(startMs);
+        return { startISO: start.toISOString(), anchorDay: dateStr(start) };
+    } catch (e) {
+        return null;
+    }
+}
+
+/** 账单周期检测失败的通知（每自然月每账户最多一次），避免每小时间隔重复轰炸 */
+async function notifyBillingCycleDegraded(env, acct) {
+    const key = `billingcycle:degraded:${getPeriodKey('month')}:${acct.accountId}`;
+    try {
+        const existed = await env.KV_STATE.get(key);
+        if (existed) return;
+        const title = '⚠️ CF 账单周期检测失败，已降级为自然月统计';
+        const content = [
+            `**账户**：${acct.accountName}`,
+            '未能从 Cloudflare 读取到订阅账单周期（可能 Token 缺少 Account Settings:Read 权限，或账户无订阅信息）。',
+            'R2 / Pages 的月度用量将按自然月近似统计，月度去重周期可能与实际计费错位。',
+            '请检查 EDGE 内 API Token 是否具备 Account Settings:Read 权限。',
+        ].join('\n');
+        const channels = await sendNotifications(env, title, content);
+        console.log('账单周期降级通知渠道结果:', JSON.stringify(channels));
+        await env.KV_STATE.put(key, '1');
+    } catch (e) {
+        console.error('发送账单元日降级通知失败:', e);
+    }
+}
+
 /** Workers / Pages：请求、错误、子请求、CPU耗时（day） */
 async function getWorkersStats(token, accountId) {
     const start = periodStart('day');
@@ -498,9 +575,9 @@ function classifyR2Action(actionType) {
     return 'B'; // 其余读类（Head/Get/Usage、未知默认 B，避免误报计费）
 }
 
-/** R2：A类/B类操作次数 + 存储字节（month） */
-async function getR2Stats(token, accountId) {
-    const start = periodStart('month');
+/** R2：A类/B类操作次数 + 存储字节（bill 周期，默认自然月降级） */
+async function getR2Stats(token, accountId, cycle) {
+    const start = (cycle && cycle.startISO) || periodStart('month');
     const end = new Date().toISOString();
     const account = await runQuery(token, `query r2Metrics($accountTag: string!, $start: Time, $end: Time) {
       viewer {
@@ -551,9 +628,9 @@ async function listPagesProjects(token, accountId) {
     return projects;
 }
 
-/** Pages：本月构建次数（按 /deployments 的 created_on 统计，配额 500 次/月） */
-async function getPagesBuildsStats(token, accountId) {
-    const monthStartIso = periodStart('month'); // 当月1日 UTC 00:00
+/** Pages：本月构建次数（按 /deployments 的 created_on 统计，配额 500 次/月，按账单周期） */
+async function getPagesBuildsStats(token, accountId, cycle) {
+    const monthStartIso = (cycle && cycle.startISO) || periodStart('month'); // 当前账单周期起点（降级为当月1日 UTC 00:00）
     const base = 'https://api.cloudflare.com/client/v4/accounts';
     const projects = await listPagesProjects(token, accountId);
     let builds = 0;
