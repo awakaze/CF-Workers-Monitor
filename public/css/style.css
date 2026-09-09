@@ -262,6 +262,73 @@ body.dark-theme {
     background: linear-gradient(90deg, #4caf50, #8bc34a);
     transition: width 0.5s ease;
 }
+.products-section {
+    margin-top: 18px;
+    padding-top: 15px;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+    color: var(--text-primary);
+}
+.products-title {
+    font-size: 0.95rem;
+    font-weight: 600;
+    margin-bottom: 10px;
+}
+.products-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.product-block {
+    background: var(--bg-primary);
+    border: var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+.product-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #f38020;
+    margin-bottom: 6px;
+}
+.product-reportonly {
+    font-size: 0.68rem;
+    font-weight: 400;
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+    border: var(--border);
+    border-radius: 4px;
+    padding: 0 5px;
+    margin-left: 4px;
+    vertical-align: middle;
+}
+.product-metric {
+    margin-bottom: 6px;
+}
+.product-metric:last-child {
+    margin-bottom: 0;
+}
+.product-metric-head {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    margin-bottom: 3px;
+}
+.product-progress {
+    height: 6px;
+    background: var(--bg-primary);
+    border: 1px solid rgba(0, 0, 0, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.product-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #f38020, #fcad32);
+    transition: width 0.5s ease;
+}
+@media (max-width: 600px) {
+    .products-grid { grid-template-columns: 1fr; }
+}
 .summary-card {
     background: var(--card-bg);
     backdrop-filter: blur(10px);

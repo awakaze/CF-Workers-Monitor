@@ -126,37 +126,9 @@ function displayData(data, showAll) {
     summaryContent.innerHTML = '';
     
     if (showAll && data.accounts) {
-        summary.style.display = 'block';
-        summaryContent.innerHTML = `
-            <div class="summary-stats-row">
-                <div class="summary-stat-item">
-                    <div class="summary-stat-label">
-                        ${ACCOUNT_SVG}
-                        Account
-                    </div>
-                    <div class="summary-stat-value">${data.accounts.length}</div>
-                </div>
-                <div class="summary-stat-item">
-                    <div class="summary-stat-label">
-                        ${PAGES_SVG}
-                        Pages
-                    </div>
-                    <div class="summary-stat-value">${data.totals.formatted.pagesSum}</div>
-                </div>
-                <div class="summary-stat-item">
-                    <div class="summary-stat-label">
-                        ${WORKER_SVG}
-                        Workers
-                    </div>
-                    <div class="summary-stat-value">${data.totals.formatted.workersSum}</div>
-                </div>
-            </div>
-            <div class="summary-remaining">
-                <div class="summary-stat-label">总剩余额度</div>
-                <div class="summary-stat-value">${data.totals.formatted.remaining}</div>
-                <div class="progress-percent">${data.totals.percent}%</div>
-            </div>
-        `;
+        // 总览汇总暂时屏蔽：跨账户按产品合并容易误导，保留账户卡片即可
+        summary.style.display = 'none';
+        summaryContent.innerHTML = '';
         data.accounts.forEach(account => {
             if (account.error) dashboard.innerHTML += createErrorCard(account);
             else dashboard.innerHTML += createAccountCard(account);
@@ -194,7 +166,7 @@ function createAccountCard(account) {
                 <div class="metric">
                     <div class="metric-label">
                         ${PAGES_SVG}
-                        Pages 请求
+                        Pages 函数请求
                     </div>
                     <div class="metric-value">${account.formatted.pagesSum}</div>
                     <div class="metric-label">${account.pagesSum.toLocaleString()} 次</div>
@@ -220,11 +192,64 @@ function createAccountCard(account) {
                     ${account.formatted.remaining} / ${account.formatted.total}
                 </div>
             </div>
+            ${renderProducts(account.products)}
             <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 0, 0, 0.1); text-align: center; color: var(--text-secondary); font-size: 0.8rem;">
                 最后更新: ${account.date}
             </div>
         </div>
     `;
+}
+
+const PRODUCT_NAMES = { pages: 'Pages(构建)', workers: 'Workers附加', kv: 'KV', r2: 'R2', d1: 'D1' };
+const PRODUCT_METRIC_LABELS = {
+    pages: { builds: '构建数' },
+    workers: { errors: '错误数', subrequests: '子请求数', cpuTimeMs: 'CPU耗时' },
+    kv: { reads: '读取', writes: '写入', storageBytes: '存储' },
+    r2: { classAOperations: 'A类操作', classBOperations: 'B类操作', storageBytes: '存储' },
+    d1: { rowsRead: '读行数', rowsWritten: '写行数', databaseSizeBytes: '存储' },
+};
+const PRODUCT_ORDER = ['pages', 'kv', 'r2', 'd1', 'workers'];
+
+function renderProducts(products) {
+    if (!products) return '';
+    let html = '<div class="products-section"><div class="products-title">其他产品用量</div><div class="products-grid">';
+    for (const pid of PRODUCT_ORDER) {
+        const p = products[pid];
+        if (!p) continue;
+        const labels = PRODUCT_METRIC_LABELS[pid] || {};
+        html += `<div class="product-block"><div class="product-name">${PRODUCT_NAMES[pid] || pid}</div>`;
+        for (const [key, m] of Object.entries(p)) {
+            const label = labels[key] || key;
+            const symbol = m.value === 0 ? `${m.formatted}` : `${m.formatted} / ${formatQuota(m)}`;
+            const tag = m.reportOnly ? ' <span class="product-reportonly">仅展示</span>' : '';
+            html += `
+                <div class="product-metric">
+                    <div class="product-metric-head">
+                        <span>${label}${tag}</span><span>${symbol} · ${m.percent}%</span>
+                    </div>
+                    <div class="product-progress">
+                        <div class="product-progress-fill" style="width: ${m.percent}%"></div>
+                    </div>
+                </div>`;
+        }
+        html += '</div>';
+    }
+    html += '</div></div>';
+    return html;
+}
+
+function formatQuota(m) {
+    if (m.unit === 'B') return formatBytes(m.quota);
+    return m.quota.toLocaleString('zh-CN') + ' ' + m.unit;
+}
+
+function formatBytes(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    const units = ['KB', 'MB', 'GB', 'TB', 'PB'];
+    let v = bytes;
+    let i = -1;
+    do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
+    return v.toFixed(2) + ' ' + units[i];
 }
 
 function createErrorCard(account) {
