@@ -8,6 +8,13 @@ let ACCOUNTS_DATA = [];
 let dropdownOpen = false;
 let isRefreshing = false;
 
+// 插值进 innerHTML 前统一转义，规避 XSS
+function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+}
+
 const themeBtn = document.getElementById('themeBtn');
 const body = document.body;
 const savedTheme = localStorage.getItem('theme') || 'light';
@@ -156,10 +163,17 @@ function displaySingleAccount(account) {
 function createAccountCard(account) {
     const statusClass = getStatusClass(account.percent);
     const statusText = getStatusText(account.percent);
+    const name = escapeHtml(account.accountName);
+    const pagesSum = escapeHtml(account.pagesSum.toLocaleString());
+    const workersSum = escapeHtml(account.workersSum.toLocaleString());
+    const percent = escapeHtml(account.percent);
+    const remaining = escapeHtml(account.formatted.remaining);
+    const total = escapeHtml(account.formatted.total);
+    const date = escapeHtml(account.date);
     return `
         <div class="card">
             <div class="account-header">
-                <div class="account-name">${account.accountName}</div>
+                <div class="account-name">${name}</div>
                 <div class="account-status ${statusClass}">${statusText}</div>
             </div>
             <div class="metric-grid">
@@ -168,33 +182,33 @@ function createAccountCard(account) {
                         ${PAGES_SVG}
                         Pages 函数请求
                     </div>
-                    <div class="metric-value">${account.formatted.pagesSum}</div>
-                    <div class="metric-label">${account.pagesSum.toLocaleString()} 次</div>
+                    <div class="metric-value">${escapeHtml(account.formatted.pagesSum)}</div>
+                    <div class="metric-label">${pagesSum} 次</div>
                 </div>
                 <div class="metric">
                     <div class="metric-label">
                         ${WORKER_SVG}
                         Workers 请求
                     </div>
-                    <div class="metric-value">${account.formatted.workersSum}</div>
-                    <div class="metric-label">${account.workersSum.toLocaleString()} 次</div>
+                    <div class="metric-value">${escapeHtml(account.formatted.workersSum)}</div>
+                    <div class="metric-label">${workersSum} 次</div>
                 </div>
             </div>
             <div class="progress-section">
                 <div class="progress-header">
                     <div class="progress-label">剩余额度</div>
-                    <div class="progress-percent">${account.percent}%</div>
+                    <div class="progress-percent">${percent}%</div>
                 </div>
                 <div class="progress-bar">
-                    <div class="progress-fill" style="width: ${account.percent}%"></div>
+                    <div class="progress-fill" style="width: ${escapeHtml(account.percent)}%"></div>
                 </div>
                 <div style="text-align: center; margin-top: 8px; color: var(--text-secondary); font-size: 0.9rem;">
-                    ${account.formatted.remaining} / ${account.formatted.total}
+                    ${remaining} / ${total}
                 </div>
             </div>
             ${renderProducts(account.products)}
             <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(0, 0, 0, 0.1); text-align: center; color: var(--text-secondary); font-size: 0.8rem;">
-                最后更新: ${account.date}
+                最后更新: ${date}
             </div>
         </div>
     `;
@@ -217,18 +231,18 @@ function renderProducts(products) {
         const p = products[pid];
         if (!p) continue;
         const labels = PRODUCT_METRIC_LABELS[pid] || {};
-        html += `<div class="product-block"><div class="product-name">${PRODUCT_NAMES[pid] || pid}</div>`;
+        html += `<div class="product-block"><div class="product-name">${escapeHtml(PRODUCT_NAMES[pid] || pid)}</div>`;
         for (const [key, m] of Object.entries(p)) {
-            const label = labels[key] || key;
-            const symbol = m.value === 0 ? `${m.formatted}` : `${m.formatted} / ${formatQuota(m)}`;
+            const label = escapeHtml(labels[key] || key);
+            const symbol = m.value === 0 ? escapeHtml(m.formatted) : `${escapeHtml(m.formatted)} / ${escapeHtml(formatQuota(m))}`;
             const tag = m.reportOnly ? ' <span class="product-reportonly">仅展示</span>' : '';
             html += `
                 <div class="product-metric">
                     <div class="product-metric-head">
-                        <span>${label}${tag}</span><span>${symbol} · ${m.percent}%</span>
+                        <span>${label}${tag}</span><span>${symbol} · ${escapeHtml(m.percent)}%</span>
                     </div>
                     <div class="product-progress">
-                        <div class="product-progress-fill" style="width: ${m.percent}%"></div>
+                        <div class="product-progress-fill" style="width: ${escapeHtml(m.percent)}%"></div>
                     </div>
                 </div>`;
         }
@@ -256,10 +270,10 @@ function createErrorCard(account) {
     return `
         <div class="card">
             <div class="account-header">
-                <div class="account-name">${account.accountName}</div>
+                <div class="account-name">${escapeHtml(account.accountName)}</div>
                 <div class="account-status status-danger">错误</div>
             </div>
-            <div class="error" style="margin: 0;">${account.error}</div>
+            <div class="error" style="margin: 0;">${escapeHtml(account.error)}</div>
         </div>
     `;
 }
