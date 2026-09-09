@@ -107,7 +107,13 @@ export default {
             });
         }
         // 手动触发入口：可用 fetch 直接跑一次监控（生产环境没有触发 scheduled 的按钮）
+        // 安全：需在请求头带 X-Auth-Token == env.AUTH_TOKEN；未配置 AUTH_TOKEN 则一律拒绝（fail-closed）
         if (url.pathname === '/run') {
+            const authToken = env.AUTH_TOKEN;
+            const sentToken = request.headers.get('X-Auth-Token') || '';
+            if (!authToken || sentToken !== authToken) {
+                return jsonResponse({ ok: false, error: '未授权：需要 X-Auth-Token 请求头与 AUTH_TOKEN 一致' }, 403);
+            }
             try {
                 await runMonitor(env);
                 const status = await readStatus(env);
@@ -171,7 +177,7 @@ async function runMonitor(env) {
                     try {
                         await checkProductMetric(
                             env, acct, product, metricKey,
-                            metrics[metricKey] || 0, meta, periodKey, notifyLog
+                            metrics[metricKey] || 0, meta, periodKey, def.period, notifyLog
                         );
                     } catch (e) {
                         console.error(`检查 ${product}/${metricKey} 失败:`, e);
@@ -194,7 +200,7 @@ async function runMonitor(env) {
  * 通用阈值检查：低于最低阈值不读 KV；仅在跨越新阈值时推送一次并写一次标志位。
  * alert:false 的非计费指标直接跳过。
  */
-async function checkProductMetric(env, acct, product, metricKey, value, meta, periodKey, notifyLog) {
+async function checkProductMetric(env, acct, product, metricKey, value, meta, periodKey, period, notifyLog) {
     if (meta && meta.alert === false) return; // 非计费指标：仅展示，不告警
     const quota = meta?.quota;
     const thresholds = computeThresholds(env, product, metricKey, meta);
@@ -233,7 +239,9 @@ async function checkProductMetric(env, acct, product, metricKey, value, meta, pe
 
     try {
         const merged = [...notified, ...crossed].sort((a, b) => a - b);
-        await env.KV_STATE.put(key, merged.join(','));
+        // 告警标志带 TTL 自动清理，避免按周期累积无限增长（day→2 天，month→32 天）
+        const expirationTtl = (period === 'month' ? 32 : 2) * 86400;
+        await env.KV_STATE.put(key, merged.join(','), { expirationTtl });
     } catch (e) {
         console.error('写入 KV 失败:', e);
     }
@@ -491,7 +499,8 @@ async function notifyBillingCycleDegraded(env, acct) {
         ].join('\n');
         const channels = await sendNotifications(env, title, content);
         console.log('账单周期降级通知渠道结果:', JSON.stringify(channels));
-        await env.KV_STATE.put(key, '1');
+        // 该 key 按自然月生成，带 TTL（32 天）自动清理
+        await env.KV_STATE.put(key, '1', { expirationTtl: 32 * 86400 });
     } catch (e) {
         console.error('发送账单元日降级通知失败:', e);
     }
