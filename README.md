@@ -37,7 +37,7 @@ Cloudflare Workers/Pages 用量监控
 
 **·** 👥 按账户独立监控 - 每个账户单独判断、各自触发通知
 
-**·** 📆 按产品周期去重 - Workers/KV/D1 按**日**（免费额度按 UTC 零点重置）、R2/Pages 按**月**（免费额度按月），同一阈值一个周期只提醒一次，不重复打扰
+**·** 📆 按产品周期去重 - Workers/KV/D1 按**日**（免费额度按 UTC 零点重置）、R2/Pages 按**账单周期**（免费额度按月，按订阅账单元日重置），同一阈值一个周期只提醒一次，不重复打扰
 
 **·** 💬 多渠道推送 - 同时支持 Server酱(微信) 与 Telegram Bot，可分别开关
 
@@ -55,13 +55,13 @@ Cloudflare Workers/Pages 用量监控
 | KV 读 | 10万/天 | 日 | 5万 / 8万 / 9.5万 |
 | KV 写 | 1千/天 | 日 | 800 / 950 |
 | KV 存储 | 1GB | 日 | 80% / 95% |
-| R2 A类操作 | 100万/月 | 月 | 80万 / 95万 |
-| R2 B类操作 | 1000万/月 | 月 | 800万 / 950万 |
-| R2 存储 | 10GB | 月 | 80% / 95% |
+| R2 A类操作 | 100万/账期 | 账期 | 80万 / 95万 |
+| R2 B类操作 | 1000万/账期 | 账期 | 800万 / 950万 |
+| R2 存储 | 10GB | 账期 | 80% / 95% |
 | D1 读行 | 500万/天 | 日 | 400万 / 475万 |
 | D1 写行 | 10万/天 | 日 | 8万 / 9.5万 |
 | D1 存储 | 5GB | 日 | 80% / 95% |
-| Pages 构建 | 500/月 | 月 | 250 / 400 / 475 |
+| Pages 构建 | 500/账期 | 账期 | 250 / 400 / 475 |
 
 
 ## 🚀 快速开始
@@ -147,11 +147,57 @@ Cloudflare Workers/Pages 用量监控
 | `kv_namespaces` | KV 绑定；`binding = "KV_STATE"`，`id` 为命名空间 ID（仓库内为作者示例值，他人使用请替换为自己创建的） |
 | `triggers.crons` | 定时触发表达式；默认每小时整点 `0 * * * *`。toml 中保持注释，在控制台 Triggers 管理，避免 push 覆盖 |
 
-**监控指标与阈值**
+**监控参数详解（产品 / 指标）**
+
+> 下表集中说明每个被监控指标：**参数名**（`THRESHOLD_<PRODUCT>_<METRIC>` 覆盖变量名）、**在 CF 中的含义**、**免费额度**、**监控内容**（数据来源与统计方式）与**默认警戒阈值**。
+> 覆盖方式：环境变量/控制台变量名 = `THRESHOLD_<产品>_<指标>`，值为**逗号分隔的升序绝对数值**；设 `0` 表示不监控该指标。未设置时使用下表默认值。
+> 存储类指标默认阈值写的是**绝对字节数**（80%、95%），也可用同名变量覆盖（如 `THRESHOLD_KV_STORAGEBYTES="858993459,1020054733"`）。
+> 周期中的"**账期**"= Cloudflare 月度计费周期（**按订阅账单元日重置，非自然月**），工具自动从订阅接口读取；读取失败时降级为自然月并推送告警。
+
+**· Workers**
+
+| 指标 | 参数名 | 在 CF 中的含义 | 免费额度 | 监控内容 / 数据来源 | 周期 | 默认警戒阈值 |
+|--|--|--|--|--|--|--|
+| 请求数 `requests` | `THRESHOLD_WORKERS_REQUESTS`（旧版 `THRESHOLDS`） | Worker 脚本 + Pages Functions 的 HTTP 调用次数 | 10 万/天 | GraphQL `workersInvocations` + `pagesFunctionsInvocations` 的 `sum(requests)` | 日（UTC 零点重置） | 50000 / 80000 / 95000 |
+| 错误数 `errors` | —（`alert:false`，仅展示） | 请求执行抛出的错误数量 | —（非计费，不计额度） | `sum(errors)` | —（不告警） | — |
+| 子请求数 `subrequests` | —（仅展示） | 单个请求内发起的子请求数量 | —（非计费） | `sum(subrequests)` | —（不告警） | — |
+| CPU 耗时 `cpuTimeMs` | —（仅展示） | 各请求累计 CPU 耗时（μs→ms） | —（非计费） | `sum(cpuTimeUs) / 1000` | —（不告警） | — |
+
+**· KV**
+
+| 指标 | 参数名 | 在 CF 中的含义 | 免费额度 | 监控内容 / 数据来源 | 周期 | 默认警戒阈值 |
+|--|--|--|--|--|--|--|
+| 读取 `reads` | `THRESHOLD_KV_READS` | KV 的 GET 读取次数 | 10 万/天 | `sum(requests)`，`actionType = read` | 日 | 50000 / 80000 / 95000 |
+| 写入 `writes` | `THRESHOLD_KV_WRITES` | KV 的 PUT 写入次数（注：每日免费额度为**写入/删除/列出 合计** 1 千次） | 1 千/天 | `sum(requests)`，`actionType = write` | 日 | 800 / 950 |
+| 存储 `storageBytes` | `THRESHOLD_KV_STORAGEBYTES` | KV 命名空间当前存储占用字节数 | 1 GB | 最新时间窗 `max(byteCount)` 求和 | 日 | 858993459（80%） / 1020054733（95%） |
+
+**· R2**
+
+| 指标 | 参数名 | 在 CF 中的含义 | 免费额度 | 监控内容 / 数据来源 | 周期 | 默认警戒阈值 |
+|--|--|--|--|--|--|--|
+| A 类操作 `classAOperations` | `THRESHOLD_R2_CLASSAOPERATIONS` | 写/复制/列/分片等变更类操作次数 | 100 万/账期 | `sum(requests)`，分类为 A 类 | 账期 | 800000（80%） / 950000（95%） |
+| B 类操作 `classBOperations` | `THRESHOLD_R2_CLASSBOPERATIONS` | 读/查询等读取类操作次数（未知分类归 B，保守不误报计费） | 1000 万/账期 | `sum(requests)`，分类为 B 类 | 账期 | 8000000（80%） / 9500000（95%） |
+| 存储 `storageBytes` | `THRESHOLD_R2_STORAGEBYTES` | R2 桶存储字节占用 | 10 GB | 最新时间窗 `max(payloadSize)+max(metadataSize)` 求和 | 账期 | 8589934592（80%） / 10200547328（95%） |
+
+**· D1**
+
+| 指标 | 参数名 | 在 CF 中的含义 | 免费额度 | 监控内容 / 数据来源 | 周期 | 默认警戒阈值 |
+|--|--|--|--|--|--|--|
+| 读行 `rowsRead` | `THRESHOLD_D1_ROWSREAD` | 查询实际扫描读取的行数 | 500 万行/天 | `sum(rowsRead)` | 日 | 4000000（80%） / 4750000（95%） |
+| 写行 `rowsWritten` | `THRESHOLD_D1_ROWSWRITTEN` | INSERT/UPDATE/DELETE 影响的行数 | 10 万行/天 | `sum(rowsWritten)` | 日 | 80000（80%） / 95000（95%） |
+| 存储 `databaseSizeBytes` | `THRESHOLD_D1_DATABASESIZEBYTES` | 账户下全部 D1 数据库存储占用（合计） | 5 GB | 最新时间窗 `max(databaseSizeBytes)` 求和 | 日 | 4294967296（80%） / 5100273664（95%） |
+
+**· Pages**
+
+| 指标 | 参数名 | 在 CF 中的含义 | 免费额度 | 监控内容 / 数据来源 | 周期 | 默认警戒阈值 |
+|--|--|--|--|--|--|--|
+| 构建 `builds` | `THRESHOLD_PAGES_BUILDS` | 本月 Pages 部署/构建次数 | 500 次/账期 | REST `/deployments` 按 `created_on` 统计本账期内 | 账期 | 250（50%） / 400（80%） / 475（95%） |
+
+**监控产品与去重**
 
 - 监控产品由 `MONITOR_PRODUCTS` 控制（默认 `workers,kv,r2,d1,pages`）；产品/指标/免费额度注册表在 `monitor/worker.js` 的 `FREE` 与 `functions/api.js` 的 `PRODUCT_DEFS`。
-- 各指标默认阈值按产品配置（见上文"合理默认阈值"表）；用 `THRESHOLD_<PRODUCT>_<METRIC>` 覆盖为绝对数值（逗号分隔升序），设 `0` 即不监控该指标。
-- 周期：Workers/KV/D1 按**日**（`YYYY-MM-DD`）去重，R2/Pages 按**月**（`YYYY-MM`）去重。
+- 周期去重键：Workers/KV/D1 按**日**（`YYYY-MM-DD`），R2/Pages 按**账单周期**记元日（`YYYY-MM-DD`）。同一阈值在一个周期内只提醒一次。
+- 账单周期读取失败时降级为自然月统计，并向 Server酱/Telegram 推送一条"账单周期检测失败"告警（每自然月每账户一次），便于及时处理。
 
 **API 密钥权限**
 
@@ -160,6 +206,37 @@ Cloudflare Workers/Pages 用量监控
 **·** Account Analytics: Read
 
 **·** Pages: Read（如需统计 Pages 项目/构建数；缺失时该项目显示为不可用/0，不阻塞其他监控）
+
+**·** Account Settings: Read（可选，推荐）：用于读取订阅账单周期，使 R2/Pages 的月度统计按**账单周期**而非自然月。缺失/不可用时自动降级为自然月统计，并推送一条"账单周期检测失败"告警，不影响其他监控
+
+**配置文件一览（修改 / 手动填入）**
+
+> 项目"配置"可分为三类：**① 需编辑并提交的仓库文件**（`monitor/wrangler.toml`，非敏感）；**② 本地手动填入的敏感文件**（复制模板生成，已 git 忽略）；**③ 生产环境在 Cloudflare 控制台手动填写**（非仓库文件）。
+
+**① 需编辑并提交的配置文件**
+
+| 文件 | 需要改哪些 |
+|--|--|
+| `monitor/wrangler.toml` | ① 把 `kv_namespaces` 的 `id` 替换为你新建 KV 命名空间的 ID；② 需调整监控产品/阈值时，在 `[vars]` 取消注释或新增 `MONITOR_PRODUCTS`、`THRESHOLD_<产品>_<指标>`（也可放控制台 Variables，优先级更高且不受 push 覆盖）。其余（`name`/`main`/`compatibility_date`/`keep_vars`/`[observability.logs]`/绑定名 `KV_STATE`）一般不用改 |
+
+**② 本地手动填入的敏感文件（复制模板 → 填实值）**
+
+| 文件 | 给谁用 | 需填字段 |
+|--|--|--|
+| 根目录 `.dev.vars`（由 `.dev.vars.example` 复制） | Pages 仪表盘本地（`pnpm dev:pages`） | `EDGE`（账户数组 JSON：`name`/`token`/`accountId`，`total` 可选） |
+| `monitor/.dev.vars`（由 `monitor/.dev.vars.example` 复制） | 监控 Worker 本地（`pnpm dev:monitor`） | `EDGE` + 可选 `SERVERCHAN_KEY`/`TG_BOT_TOKEN`/`TG_CHAT_ID` |
+
+> ⚠️ `.dev.vars` 已被 `.gitignore` 忽略、不会提交；模板 `.dev.vars.example` 会提交、仅含占位符。敏感值只放进本文件或生产 secret，**切勿写入 `wrangler.toml` 或仓库其他文件**。
+
+**③ 生产环境需在 Cloudflare 控制台手动填写（非仓库文件）**
+
+| 位置 | 填什么 |
+|--|--|
+| Pages 控制台 → Settings → Environment Variables | `EDGE`（账户数组 JSON） |
+| Worker → Settings → Variables and Secrets（Secrets 区） | `EDGE`（必需）、`SERVERCHAN_KEY`、`TG_BOT_TOKEN`、`TG_CHAT_ID`（可选） |
+| Worker → Settings → Variables and Secrets（Variables 区） | 可选覆盖：`MONITOR_PRODUCTS`、`THRESHOLD_*` 等非敏感项 |
+| Worker → Settings → Triggers → Cron Triggers | `0 * * * *`（每小时整点；**务必添加**，否则 Worker 不会自动运行） |
+| 控制台 → Workers & Pages → KV | 新建命名空间（如 `cf-monitor-state`），把其 ID 填回 `monitor/wrangler.toml` 的 `kv_namespaces.id` |
 
 ## 🚧 部署教程（阈值监控 Worker）
 
@@ -271,9 +348,9 @@ http://localhost:8787/__scheduled?cron=0+*+*+*+*
 |--|--|--|--|
 | Workers | 请求数（errors/子请求/CPU耗时 仅展示不告警） | 10万/天 | 日 |
 | KV | 读取 / 写入 / 存储 | 读10万、写1千/天，存储1GB | 日 |
-| R2 | A类操作 / B类操作 / 存储 | A类100万、B类1000万/月，存储10GB | 月 |
+| R2 | A类操作 / B类操作 / 存储 | A类100万、B类1000万/账期，存储10GB | 账期 |
 | D1 | 读行数 / 写行数 / 存储 | 读500万行、写10万行/天，存储5GB | 日 |
-| Pages | 构建数 | 500/月 | 月 |
+| Pages | 构建数 | 500/账期 | 账期 |
 
 > 免费额度以 Cloudflare 官方最新为准，可在 `monitor/worker.js` 的 `FREE` 注册表与 `functions/api.js` 的 `PRODUCT_DEFS` 中调整。各指标默认阈值按产品配置（见上文"合理默认阈值"表）。
 
