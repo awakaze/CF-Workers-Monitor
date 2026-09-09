@@ -170,8 +170,9 @@ Cloudflare Workers/Pages 用量监控
 2. 新建命名空间，例如命名为 `cf-monitor-state`，复制它的 **namespace id**。
 
 **2.** 填写 `monitor/wrangler.toml`
-1. 打开 `monitor/wrangler.toml`，把上一步的 id 填入 `kv_namespaces` 中的 `id` 字段。
-2. 如需调整监控范围或阈值，可取消注释 `MONITOR_PRODUCTS`（默认 `workers,kv,r2,d1,pages`）、`THRESHOLDS` 或 `THRESHOLD_<产品>_<指标>`（vars）以及 `crons`。
+1. 复制模板 `monitor/wrangler.toml.example` 为 `monitor/wrangler.toml`（真实配置文件已被 `.gitignore` 忽略，不会提交到仓库）。
+2. 打开 `monitor/wrangler.toml`，把上一步的 KV 命名空间 ID 填入 `kv_namespaces` 中的 `id` 字段。
+3. 如需调整监控范围或阈值，可取消注释 `MONITOR_PRODUCTS`（默认 `workers,kv,r2,d1,pages`）、`THRESHOLDS` 或 `THRESHOLD_<产品>_<指标>`（vars）以及 `crons`。
 
 **3.** 配置敏感变量（项目根目录执行，每次输入一个变量名）
 ```
