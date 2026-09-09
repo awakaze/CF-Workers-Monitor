@@ -144,8 +144,8 @@ Cloudflare Workers/Pages 用量监控
 |--|--|
 | `name` / `main` | Worker 名称与入口（`worker.js`） |
 | `compatibility_date` | Workers 运行时兼容日期 |
-| `kv_namespaces` | KV 绑定；`binding = "KV_STATE"`，`id` 填控制台创建的命名空间 ID（本地 dev 可先用占位符，仅 deploy 需要真实 ID） |
-| `triggers.crons` | 定时触发表达式，默认 `0 * * * *`（每小时整点） |
+| `kv_namespaces` | KV 绑定；`binding = "KV_STATE"`，`id` 为命名空间 ID（仓库内为作者示例值，他人使用请替换为自己创建的） |
+| `triggers.crons` | 定时触发表达式；默认每小时整点 `0 * * * *`。toml 中保持注释，在控制台 Triggers 管理，避免 push 覆盖 |
 
 **监控指标与阈值**
 
@@ -169,18 +169,26 @@ Cloudflare Workers/Pages 用量监控
 1. 进入 Cloudflare 控制台 → Workers & Pages → KV。
 2. 新建命名空间，例如命名为 `cf-monitor-state`，复制它的 **namespace id**。
 
-**2.** 填写 `monitor/wrangler.toml`
-1. 复制模板 `monitor/wrangler.toml.example` 为 `monitor/wrangler.toml`（真实配置文件已被 `.gitignore` 忽略，不会提交到仓库）。
-2. 打开 `monitor/wrangler.toml`，把上一步的 KV 命名空间 ID 填入 `kv_namespaces` 中的 `id` 字段。
-3. 如需调整监控范围或阈值，可取消注释 `MONITOR_PRODUCTS`（默认 `workers,kv,r2,d1,pages`）、`THRESHOLDS` 或 `THRESHOLD_<产品>_<指标>`（vars）以及 `crons`。
+**2.** 修改 `monitor/wrangler.toml`
+打开 `monitor/wrangler.toml`，把 `kv_namespaces` 中的 `id` 换成你自己创建的命名空间 ID（仓库内已有作者的示例值；KV id 非敏感可入库，他人使用请替换）。如需调整监控范围或阈值，可参考注释取消 `MONITOR_PRODUCTS` / `THRESHOLDS` / `THRESHOLD_<产品>_<指标>`（或直接在控制台 Variables 设置，见第 4 步）。
 
-**3.** 配置敏感变量（项目根目录执行，每次输入一个变量名）
-```
-pnpm secret:put EDGE            # 必需的账户数组，格式同前面的 EDGE
-pnpm secret:put SERVERCHAN_KEY  # 可选，Server酱 SendKey
-pnpm secret:put TG_BOT_TOKEN    # 可选，Telegram Bot Token
-pnpm secret:put TG_CHAT_ID      # 可选，Telegram 接收 chat id
-```
+**3.** 创建 Worker（推荐 Git 集成，push 自动部署）
+1. Cloudflare 控制台 → Workers & Pages → Create → 选择 GitHub 仓库。
+2. 构建命令填：`npx wrangler deploy -c monitor/wrangler.toml`，点保存并部署。
+3. 之后每次 push 到 main 自动重新部署。
+4. 添加 Cron：进入该 Worker → Settings → Triggers → Cron Triggers，添加 `0 * * * *`（每小时整点）。Cron 未在 toml 声明，故控制台配置不会被 push 覆盖。
+
+**4.** 配置敏感变量（控制台 Secrets）
+进入 Worker → Settings → Variables and Secrets，添加：
+
+| 变量 | 必填 | 说明 |
+|--|--|--|
+| EDGE | 是 | 账户数组 JSON（格式见下方） |
+| SERVERCHAN_KEY | 否 | Server酱 SendKey |
+| TG_BOT_TOKEN | 否 | Telegram Bot Token |
+| TG_CHAT_ID | 否 | Telegram 接收 chat id |
+
+阈值、监控产品等非敏感项也可在此添加变量覆盖默认值（如 `THRESHOLD_R2_CLASSBOPERATIONS="8000000,9500000"`、`MONITOR_PRODUCTS="workers,kv,r2,d1,pages"`），控制台变量优先级高于代码默认值，且不会被 push 覆盖。
 
 `EDGE` 内容示例（与 Pages 仪表盘同款，多账户以此类推）：
 ```json
@@ -189,16 +197,12 @@ pnpm secret:put TG_CHAT_ID      # 可选，Telegram 接收 chat id
 ]
 ```
 
-**4.** 部署 Worker（项目根目录执行）
-```
-pnpm deploy:monitor
-```
-
 **5.** 验证
 1. 打开 Worker 访问地址，返回 `{"ok": true, ...}` 即运行正常。
-2. 临时把 `THRESHOLDS` 调小（如 `"1,50"`）并触发一次 Cron，观察是否收到 Server酱/Telegram 消息；同一阈值一天内不会重复推送。
+2. 临时调低阈值（如控制台设 `THRESHOLDS="1,50"`）并手动触发一次 Cron，观察是否收到 Server酱/Telegram 消息；同一阈值一个周期内不会重复推送。
 
-> 提示：仪表盘（Pages）与监控（Worker）都需要各自配置 `EDGE`；仅在 Worker 上绑定 `KV_STATE`。
+> 提示：仪表盘（Pages）与监控（Worker）都需要各自配置 `EDGE`；`KV_STATE` 绑定已在 `monitor/wrangler.toml` 中声明，Cron 在控制台 Triggers 管理。
+> 本地部署备选：配置好 `monitor/.dev.vars` 后，在项目根目录执行 `pnpm deploy:monitor`。
 
 ## 🧪 本地开发测试
 
