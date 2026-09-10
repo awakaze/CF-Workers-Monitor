@@ -107,13 +107,8 @@ export default {
             });
         }
         // 手动触发入口：可用 fetch 直接跑一次监控（生产环境没有触发 scheduled 的按钮）
-        // 安全：需在请求头带 X-Auth-Token == env.AUTH_TOKEN；未配置 AUTH_TOKEN 则一律拒绝（fail-closed）
+        // 说明：不设验证，任何 /run 请求都会实际跑一次监控。会重复消耗 GraphQL 取数额度，仅建议偶尔手动使用
         if (url.pathname === '/run') {
-            const authToken = env.AUTH_TOKEN;
-            const sentToken = request.headers.get('X-Auth-Token') || '';
-            if (!authToken || sentToken !== authToken) {
-                return jsonResponse({ ok: false, error: '未授权：需要 X-Auth-Token 请求头与 AUTH_TOKEN 一致' }, 403);
-            }
             try {
                 await runMonitor(env);
                 const status = await readStatus(env);

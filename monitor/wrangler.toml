@@ -43,7 +43,6 @@ kv_namespaces = [
 #   SERVERCHAN_KEY  # Server酱 SendKey（可选）
 #   TG_BOT_TOKEN    # Telegram Bot Token（可选）
 #   TG_CHAT_ID      # Telegram 接收 chat id（可选）
-#   AUTH_TOKEN      # /run 手动触发入口的鉴权密钥（请求头 X-Auth-Token 需与之一致；可选。未配置则 /run 一律返回 403，fail-closed 安全默认）
 # 本地开发时放在 monitor/.dev.vars（已被 .gitignore 忽略）
 
 # 可观测性：收集调用日志并保留到 Workers 仪表板（防止 push 部署时日志配置被覆盖重置）
