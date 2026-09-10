@@ -98,12 +98,13 @@ export default {
         const url = new URL(request.url);
         if (url.pathname === '/') {
             const status = await readStatus(env);
+            const view = toBeijingStatus(status);
             return jsonResponse({
                 ok: true,
                 service: 'cf-monitor',
                 message: '阈值监控 Worker 正常运行',
-                lastRun: status.lastRun || null,
-                lastNotify: status.lastNotify || null,
+                lastRun: view.lastRun || null,
+                lastNotify: view.lastNotify || null,
             });
         }
         // 手动触发入口：可用 fetch 直接跑一次监控（生产环境没有触发 scheduled 的按钮）
@@ -112,11 +113,12 @@ export default {
             try {
                 await runMonitor(env);
                 const status = await readStatus(env);
+                const view = toBeijingStatus(status);
                 return jsonResponse({
                     ok: true,
                     message: '已手动触发一次监控',
-                    lastRun: status.lastRun || null,
-                    lastNotify: status.lastNotify || null,
+                    lastRun: view.lastRun || null,
+                    lastNotify: view.lastNotify || null,
                 });
             } catch (e) {
                 return jsonResponse({ ok: false, error: e.message }, 500);
@@ -313,6 +315,35 @@ function formatBytes(bytes) {
     let i = -1;
     do { v /= 1024; i++; } while (v >= 1024 && i < units.length - 1);
     return v.toFixed(2) + ' ' + units[i];
+}
+
+/**
+ * 输出时间统一转北京时间（UTC+8）展示；仅影响 / 与 /run 的返回结果，不改 KV 存储。
+ * 说明：存储与统计周期仍按 UTC（与 Cloudflare 账单口径一致），仅在展示层转北京时间。
+ */
+function formatBeijingTime(iso) {
+    if (!iso) return null;
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const b = new Date(d.getTime() + 8 * 3600 * 1000);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${b.getUTCFullYear()}-${p(b.getUTCMonth() + 1)}-${p(b.getUTCDate())} ${p(b.getUTCHours())}:${p(b.getUTCMinutes())}:${p(b.getUTCSeconds())}`;
+}
+
+/** 状态对象 → 仅时间字段转北京时间的副本（lastRun、lastNotify 及其 attempts） */
+function toBeijingStatus(status) {
+    if (!status || typeof status !== 'object') return status;
+    const out = { ...status, lastRun: formatBeijingTime(status.lastRun) };
+    if (status.lastNotify) {
+        out.lastNotify = {
+            ...status.lastNotify,
+            time: formatBeijingTime(status.lastNotify.time),
+            attempts: Array.isArray(status.lastNotify.attempts)
+                ? status.lastNotify.attempts.map((a) => ({ ...a, time: formatBeijingTime(a.time) }))
+                : status.lastNotify.attempts,
+        };
+    }
+    return out;
 }
 
 /**
